@@ -52,38 +52,39 @@ WHERE "<http://marklogic.com/semantics/Person/name>" = "Adam Fowler"
 Generates
 
 ```sparql
-sem:sparql("
+sem:sparql('
   SELECT ?subject ?predicate ?object GRAPH ?graph WHERE {
     ?subject a <http://marklogic.com/semantics/Person> .
     ?subject <http://marklogic.com/semantics/Person/name> "Adam Fowler" .
     ?subject ?predicate ?object .
   }
-")
+')
 ```
 
 Returns
 
 | uri | subject | graph | <http://marklogic.com/semantics/Person/name> | etc |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | ---- |
 | /triples/123456 | <http://marklogic.com/semantics/Person#AdamFowler> | default | Adam Fowler | etc |
 
 
 ```sql
-SELECT subject,<http://marklogic.com/semantics/Person/age> from "triples.<http://marklogic.com/semantics/Person>"
+SELECT subject,<http://marklogic.com/semantics/Person/age>
+FROM "triples.<http://marklogic.com/semantics/Person>"
 WHERE "<http://marklogic.com/semantics/Person/name>" = "Adam Fowler"
 ```
 
 Generates
 
 ```sparql
-sem:sparql("
+sem:sparql('
   SELECT ?subject ?predicate ?object GRAPH ?graph WHERE {
     ?subject a <http://marklogic.com/semantics/Person> .
     ?subject <http://marklogic.com/semantics/Person/name> "Adam Fowler" .
     ?subject ?predicate ?object .
     FILTER (?predicate = (<http://marklogic.com/semantics/Person/age>) ) .
   }
-")
+')
 ```
 
 Returns
