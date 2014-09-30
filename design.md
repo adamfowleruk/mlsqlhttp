@@ -3,7 +3,8 @@
 ## Select query syntax
 
 ```sql
-SELECT [field list|*] FROM [triples|blank for documents].[RDF Type|collection] WHERE [predicate|element] [=|<|>|<=|>=] LIMIT [start,]length
+SELECT [field list|*] FROM [triples|blank for documents].[RDF Type|collection]
+WHERE [predicate|element] [=|<|>|<=|>=] LIMIT [start,]length
 ```
 
 ### Examples
@@ -22,7 +23,7 @@ cts:search(fn:collection(temperatures),
 
 Returns
 
-| ____uri | city | temperature | month |
+| uri | city | temperature | month |
 | --- | --- | --- | --- |
 | /temperatures/1 | Derby | 12 | Jun |
 | /temperatures/2 | Derby | 14 | Apr |
@@ -44,7 +45,8 @@ Returns
 | 10 |
 
 ```sql
-SELECT * from "triples.<http://marklogic.com/semantics/Person>" WHERE "<http://marklogic.com/semantics/Person/name>" = "Adam Fowler"
+SELECT * from "triples.<http://marklogic.com/semantics/Person>"
+WHERE "<http://marklogic.com/semantics/Person/name>" = "Adam Fowler"
 ```
 
 Generates
@@ -61,13 +63,14 @@ sem:sparql("
 
 Returns
 
-| ____uri | subject | graph | <http://marklogic.com/semantics/Person/name> | ... |
+| uri | subject | graph | <http://marklogic.com/semantics/Person/name> | etc |
 | --- | --- | --- | --- |
-| /triples/123456 | <http://marklogic.com/semantics/Person#AdamFowler> | default | Adam Fowler | ... |
+| /triples/123456 | <http://marklogic.com/semantics/Person#AdamFowler> | default | Adam Fowler | etc |
 
 
 ```sql
-SELECT subject,<http://marklogic.com/semantics/Person/age> from "triples.<http://marklogic.com/semantics/Person>" WHERE "<http://marklogic.com/semantics/Person/name>" = "Adam Fowler"
+SELECT subject,<http://marklogic.com/semantics/Person/age> from "triples.<http://marklogic.com/semantics/Person>"
+WHERE "<http://marklogic.com/semantics/Person/name>" = "Adam Fowler"
 ```
 
 Generates
@@ -85,6 +88,6 @@ sem:sparql("
 
 Returns
 
-| ____uri | subject | graph | <http://marklogic.com/semantics/Person/age> |
+| uri | subject | graph | <http://marklogic.com/semantics/Person/age> |
 | --- | --- | --- | --- |
 | /triples/123456 | <http://marklogic.com/semantics/Person#AdamFowler> | default | 33 |
