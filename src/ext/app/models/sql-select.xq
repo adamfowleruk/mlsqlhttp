@@ -5,8 +5,12 @@ declare default function namespace "http://marklogic.com/sql/select";
 
 import module namespace mlsqlc = "http://marklogic.com/sql/common" at 'sql-common.xq';
 
-declare function select($sql as xs:string) as map:map {
+declare function select($sql as xs:string) as map:map* {
   let $stmt := mlsqlc:parse($sql)
+  return selectParsed($stmt)
+};
+
+declare function selectParsed($stmt as node()) as map:map* {
   let $query := mlsqlc:generateQuery($stmt)
   for $doc in cts:search(/, $query)
   (:
@@ -21,16 +25,13 @@ declare %private function buildRow($row as node(), $query as cts:query, $stmt as
     for $column in $stmt/result
     let $name := $column/name
     let $alias := 
-      if ($column/alias != () and not(empty($column/alias))) then
+      if (not(empty($column/alias))) then
         $column/alias
-      else if (not(empty($name))) then
-        $name
       else 
-        $column/value
+        $name
     (:
      : TODO: 
-     : 1. support more functions
-     : 2. support inner queries
+     : 1. support inner queries
      :)
     return
       if ($column/type = 'identifier') then
@@ -47,32 +48,92 @@ declare %private function buildRow($row as node(), $query as cts:query, $stmt as
             map:entry($alias, $column/value)
           )
       else if ($column/type = 'function') then
-        if ($column/name = 'count') then
-          map:new(
-              map:entry($alias, doCount($row, $query, $stmt))
-            )
-        else
-          error((), 'Unexpected function: "'|| $column || '"')
+        processFunctions($row, $column, $query, $stmt)
       else
         error((), 'Unexpected column: "'|| $column || '"')
   return map:new($result)
 };
 
-declare %private function doCount($row as node(), $query as cts:query, $stmt as node()) as xs:int {
-  let $finalQuery := cts:and-query((
+declare %private function processFunctions($row as node(), $column as node(), $query as cts:query, $stmt as node()) as map:map {
+  (:
+   : TODO: 
+   : 1. support more functions
+   :)
+  let $groupQuery := prepareGroupByQuery($row, $query, $stmt)
+  let $alias :=
+    if (not(empty($column/alias))) then
+      $column/alias 
+    else
+      (: there has got to be a better way to construct this :)
+      $column/name || '(' || $column/args/(name|value) || ')'
+  let $result := 
+    if ($column/name = 'count') then
+      doCount($groupQuery)
+    else if ($column/name = 'max') then
+      doMax($column/args/name, $groupQuery)
+    else if ($column/name = 'min') then
+      doMin($column/args/name, $groupQuery)
+    else if ($column/name = 'avg') then
+      doAvg($column/args/name, $groupQuery)
+    else
+      error((), 'Unexpected function: "'|| $column || '"')
+  return map:new(
+      map:entry($alias, $result)
+    )
+};
+
+declare %private function prepareGroupByQuery($row as node(), $query as cts:query, $stmt as node()) as cts:query {
+  cts:and-query((
       $query,
       for $group in $stmt/group/expression[type = 'identifier']
-      return cts:element-value-query(xs:QName($group/name), $row/*[node-name() eq $group/name]/string())
+      return 
+        try {
+          let $indexTest := cts:element-reference(xs:QName($group/name))
+          return cts:element-range-query(xs:QName($group/name), "=", $row/*[node-name() eq $group/name]/string())
+        } catch ($noIndexEx) {
+          cts:element-value-query(xs:QName($group/name), $row/*[node-name() eq $group/name]/string())
+        }
     ))
-  let $_ := xdmp:log('review query: ' || $finalQuery)
-  return
-    try {
-      (: use index if available :)
-      xdmp:estimate(cts:search(/, $finalQuery))
-    } catch ($noIndexEx) {
-      (: else, fall back to something basic :)
-      count(cts:search(/, $finalQuery))
-    }
+};
+
+declare %private function doCount($groupByQuery as cts:query) as xs:anyAtomicType {
+  try {
+    (: use index if available :)
+    xdmp:estimate(cts:search(/, $groupByQuery))
+  } catch ($noIndexEx) {
+    (: else, fall back to something basic :)
+    count(cts:search(/, $groupByQuery))
+  }
+};
+
+declare %private function doMax($field as xs:string, $groupByQuery as cts:query) as xs:anyAtomicType {
+  try {
+    (: use index if available :)
+    cts:max(cts:element-reference(xs:QName($field)), (), $groupByQuery)
+  } catch ($noIndexEx) {
+    (: else, fall back to something basic :)
+    fn:max(cts:search(/, $groupByQuery)//*[node-name() eq xs:QName($field)]/data())
+  }
+};
+
+declare %private function doMin($field as xs:string, $groupByQuery as cts:query) as xs:anyAtomicType {
+  try {
+    (: use index if available :)
+    cts:min(cts:element-reference(xs:QName($field)), (), $groupByQuery)
+  } catch ($noIndexEx) {
+    (: else, fall back to something basic :)
+    fn:min(cts:search(/, $groupByQuery)//*[node-name() eq xs:QName($field)]/data())
+  }
+};
+
+declare %private function doAvg($field as xs:string, $groupByQuery as cts:query) as xs:anyAtomicType {
+  try {
+    (: use index if available :)
+    cts:avg-aggregate(cts:element-reference(xs:QName($field)), (), $groupByQuery)
+  } catch ($noIndexEx) {
+    (: else, fall back to something basic :)
+    fn:avg(cts:search(/, $groupByQuery)//*[node-name() eq xs:QName($field)]/data())
+  }
 };
 
 declare %private function allImmediate($row as node()) as map:map {

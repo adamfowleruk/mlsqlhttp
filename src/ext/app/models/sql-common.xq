@@ -3,6 +3,9 @@ xquery version "1.0-ml";
 module namespace mlsqlc = "http://marklogic.com/sql/common";
 declare default function namespace "http://marklogic.com/sql/common";
 
+(: tsk, cyclic dependency... risky... :)
+import module namespace mlsqls = "http://marklogic.com/sql/select" at 'sql-select.xq';
+
 declare function parse($sql as xs:string) as node() {
   let $result := xdmp:javascript-eval('
     var sqlp = require("src/ext/app/lib/parser.sjs");
@@ -42,20 +45,23 @@ declare %private function convertSimpleQuery($node as node()) as cts:query {
    :)
   let $field := $node/(left|right)[type = 'identifier']/name
   let $value := $node/(left|right)[type = 'literal']/value
-  return
-    try {
-      (: use index if available :)
-      let $indexTest := cts:element-reference(xs:QName($field))
-      return cts:element-range-query(xs:QName($field), $node/operation, $value)
-    } catch ($noIndexEx) {
-      if ($node/operation = '=' or $node/operation = 'in' ) then
-        (: else, fall back to something basic :)
-        cts:element-value-query(xs:QName($field), $value)
-      else
-        (: reject if totally not possible :)
-        error((), 'Use "=" or "in" (found: "'|| $node/operation ||'"), '
-          || 'or create an index for this field: ' || $node/left/name)
-    }
+  return prepareSimpleQuery($field, $node/operation, $value)
+};
+
+declare %private function prepareSimpleQuery($field as xs:string, $operation as xs:string, $value as xs:anyAtomicType) as cts:query {
+  try {
+    (: use index if available :)
+    let $indexTest := cts:element-reference(xs:QName($field), ('type='||xdmp:type($value)))
+    return cts:element-range-query(xs:QName($field), $operation, $value)
+  } catch ($noIndexEx) {
+    if ($operation = '=' or $operation = 'in' ) then
+      (: else, fall back to something basic :)
+      cts:element-value-query(xs:QName($field), $value)
+    else
+      (: reject if totally not possible :)
+      error((), 'Use "=" or "in" (found: "'|| $operation ||'"), '
+        || 'or create an index for this field: ' || $field)
+  }
 };
 
 declare %private function convertQueryGroups($node as node()) as cts:query {
@@ -79,8 +85,18 @@ declare %private function convertQueryGroups($node as node()) as cts:query {
   else if (($node/left/type/data() = 'identifier' and $node/right/type/data() = 'literal') or 
       ($node/right/type/data() = 'identifier' and $node/left/type/data() = 'literal')) then
     convertSimpleQuery($node)
+  else if (($node/left/type/data() = 'identifier' and $node/right/type/data() = 'statement') or 
+      ($node/right/type/data() = 'identifier' and $node/left/type/data() = 'statement')) then
+    buildSelectQuery($node)
   else
-    error((), 'Unexpected operation: "'|| $node/operation || '"'||count($simple))
+    error((), 'Unexpected operation: "'|| $node || '"')
+};
+
+declare %private function buildSelectQuery($node as node()) as cts:query {
+  let $field := $node/(left|right)[type='identifier']/name
+  let $result := mlsqls:selectParsed($node/(left|right)[type='statement'])[1]
+  let $value := map:get($result, map:keys($result)[1])
+  return prepareSimpleQuery($field, $node/operation, $value)
 };
 
 declare %private function buildTableQuery($node as node()) as cts:query {
