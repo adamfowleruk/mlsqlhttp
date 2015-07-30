@@ -3,9 +3,6 @@ xquery version "1.0-ml";
 module namespace mlsqlc = "http://marklogic.com/sql/common";
 declare default function namespace "http://marklogic.com/sql/common";
 
-(: tsk, cyclic dependency... risky... :)
-import module namespace mlsqls = "http://marklogic.com/sql/select" at 'sql-select.xq';
-
 declare function parse($sql as xs:string) as node() {
   let $result := xdmp:javascript-eval('
     var sqlp = require("src/ext/app/lib/parser.sjs");
@@ -15,7 +12,7 @@ declare function parse($sql as xs:string) as node() {
   return (xdmp:unquote(xdmp:quote($result))/statement)
 };
 
-declare function generateQuery($stmt as node()) as cts:query {
+declare function generateQuery($stmt as node(), $selectCb as xdmp:function) as cts:query {
   let $tableQ := buildTableQuery($stmt/from)
   (: 
    : for some reason doing the or-query within buildTableQuery 
@@ -25,7 +22,7 @@ declare function generateQuery($stmt as node()) as cts:query {
     cts:or-query(buildTableQuery($stmt/from))
   else
     $tableQ
-  let $whereQ := convertQueryGroups($stmt/where)
+  let $whereQ := convertQueryGroups($stmt/where, $selectCb)
   return cts:and-query(($tableQ, $whereQ))
 };
 
@@ -48,25 +45,47 @@ declare %private function convertSimpleQuery($node as node()) as cts:query {
   return prepareSimpleQuery($field, $node/operation, $value)
 };
 
-declare %private function prepareSimpleQuery($field as xs:string, $operation as xs:string, $value as xs:anyAtomicType) as cts:query {
-  try {
-    (: use index if available :)
-    let $indexTest := cts:element-reference(xs:QName($field), ('type='||xdmp:type($value)))
-    return cts:element-range-query(xs:QName($field), $operation, $value)
-  } catch ($noIndexEx) {
-    if ($operation = '=' or $operation = 'in' ) then
-      (: else, fall back to something basic :)
-      cts:element-value-query(xs:QName($field), $value)
+declare %private function prepareSimpleQuery($field as xs:string, $operation as xs:string, $value as xs:anyAtomicType*) as cts:query {
+  (:
+   : TODO:
+   : 1. handle 'like' $operation
+   : 2. handle 'rlike' $operation
+   : 3. handle 'null', i.e. 'is not null' or 'is null'
+   :)
+  let $newOp := replace($operation, "^not\s+|\s+not$|^!", "")
+  let $not := ($operation != $newOp)
+  let $newOp := 
+    if ($newOp = 'in' or $newOp = 'is') then
+      '='
+    else if ($newOp = '<>') then
+      '!='
     else
-      (: reject if totally not possible :)
-      error((), 'Use "=" or "in" (found: "'|| $operation ||'"), '
-        || 'or create an index for this field: ' || $field)
-  }
+      $newOp 
+  let $tempResult := 
+    try {
+      (: use index if available :)
+      let $indexTest := cts:element-reference(xs:QName($field), ('type='||xdmp:type($value)))
+      return cts:element-range-query(xs:QName($field), $newOp, $value)
+    } catch ($noIndexEx) {
+      if ($newOp = '=' or $newOp = 'in' ) then
+        (: else, fall back to something basic :)
+        cts:element-value-query(xs:QName($field), $value)
+      else
+        (: reject if totally not possible :)
+        error((), 'Use "=" or "in" (found: "'|| $newOp ||'"), '
+          || 'or create an index for this field: ' || $field)
+    }
+  let $tempResult :=
+    if ($not) then
+      cts:not-query($tempResult)
+    else
+      $tempResult
+   return $tempResult
 };
 
-declare %private function convertQueryGroups($node as node()) as cts:query {
+declare %private function convertQueryGroups($node as node(), $selectCb as xdmp:function) as cts:query {
   (: for recursion :) 
-  let $groups := convertQueryGroups($node/(left|right)[left/type/data() = 'expression'])
+  let $groups := convertQueryGroups($node/(left|right)[left/type/data() = 'expression'], $selectCb)
   (: for direct conversion :)
   let $simple := convertSimpleQuery($node/(left|right)[
       (left/type/data() = 'identifier' and right/type/data() = 'literal') or 
@@ -87,14 +106,14 @@ declare %private function convertQueryGroups($node as node()) as cts:query {
     convertSimpleQuery($node)
   else if (($node/left/type/data() = 'identifier' and $node/right/type/data() = 'statement') or 
       ($node/right/type/data() = 'identifier' and $node/left/type/data() = 'statement')) then
-    buildSelectQuery($node)
+    buildSelectQuery($node, $selectCb)
   else
     error((), 'Unexpected operation: "'|| $node || '"')
 };
 
-declare %private function buildSelectQuery($node as node()) as cts:query {
+declare %private function buildSelectQuery($node as node(), $selectCb as xdmp:function) as cts:query {
   let $field := $node/(left|right)[type='identifier']/name
-  let $result := mlsqls:selectParsed($node/(left|right)[type='statement'])[1]
+  let $result := xdmp:apply($selectCb, $node/(left|right)[type='statement'])[1]
   let $value := map:get($result, map:keys($result)[1])
   return prepareSimpleQuery($field, $node/operation, $value)
 };
@@ -109,11 +128,12 @@ declare %private function buildTableQuery($node as node()) as cts:query {
     else if ($count = 2) then
       if ($tokens[1] = 'collection') then
         cts:collection-query($tokens[2])
-      else if ($tokens[1] = 'directory') then
+      else if ($tokens[1] = 'documents') then
         (: should we supply infinity as depth? :)
-        cts:directory-query("/" || $tokens[1] || "/")
+        cts:directory-query("/" || $tokens[2] || "/")
       else
         error((), 'Unexpected source: "'|| $source)
     else
       error((), 'Unexpected source: "'|| $source)
 };
+

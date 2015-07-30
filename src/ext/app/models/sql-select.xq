@@ -4,19 +4,52 @@ module namespace mlsqls = "http://marklogic.com/sql/select";
 declare default function namespace "http://marklogic.com/sql/select";
 
 import module namespace mlsqlc = "http://marklogic.com/sql/common" at 'sql-common.xq';
+import module namespace search = "http://marklogic.com/appservices/search"
+     at "/MarkLogic/appservices/search/search.xqy";
 
-declare function select($sql as xs:string) as map:map* {
+declare function select($sql as xs:string) {
   let $stmt := mlsqlc:parse($sql)
   return selectParsed($stmt)
 };
 
-declare function selectParsed($stmt as node()) as map:map* {
-  let $query := mlsqlc:generateQuery($stmt)
-  for $doc in cts:search(/, $query)
+declare function selectParsed($stmt as node()) {
+  let $query := mlsqlc:generateQuery($stmt, xdmp:function(xs:QName("mlsqlc:selectParsed")))
+  let $sort := buildSort($stmt/order)
+  let $option :=
+    <options xmlns="http://marklogic.com/appservices/search">
+      <additional-query>{$query}</additional-query>
+      {$sort}
+    </options>
+  (:
+   : sql starts it's indexes with 0, ml starts it's indexes with 1
+   : 'offset' is actually the LIMIT of sqlite. parser is using the wrong keyword
+   :)
+  for $result in search:search("", $option, 
+    (xs:long($stmt/limit/start/value/data()) + 1), 
+    ($stmt/limit/offset/value))//search:result
   (:
    : should we consider each source? 
    :)
-  return buildRow($doc/*[1], $query, $stmt)
+  return buildRow(doc($result/@uri)/*[1], $query, $stmt)  
+};
+
+declare %private function buildSort($sort as node()) as node()? {
+  try {
+    let $indexTest := cts:element-reference(xs:QName($sort/expression/name))
+    let $field := '<element name="' || $sort/expression/name || '" />'
+    let $direction := 
+      if (exists($sort/direction) and matches($sort/direction, "^desc(ending)?$")) then
+        ()
+      else
+        'direction="ascending"'
+    let $result := '<sort-order ' || $direction || '>' || $field || '</sort-order>'
+    return
+      if (exists($sort)) then
+        xdmp:unquote($result, "http://marklogic.com/appservices/search")
+      else ()
+  } catch ($noIndexEx) {
+    error((), 'Index required for sort via column: "'|| $sort/expression/name || '"')
+  }
 };
 
 declare %private function buildRow($row as node(), $query as cts:query, $stmt as node()) as map:map {
@@ -24,11 +57,7 @@ declare %private function buildRow($row as node(), $query as cts:query, $stmt as
   let $result := 
     for $column in $stmt/result
     let $name := $column/name
-    let $alias := 
-      if (not(empty($column/alias))) then
-        $column/alias
-      else 
-        $name
+    let $alias := $column/alias
     (:
      : TODO: 
      : 1. support inner queries
@@ -60,12 +89,7 @@ declare %private function processFunctions($row as node(), $column as node(), $q
    : 1. support more functions
    :)
   let $groupQuery := prepareGroupByQuery($row, $query, $stmt)
-  let $alias :=
-    if (not(empty($column/alias))) then
-      $column/alias 
-    else
-      (: there has got to be a better way to construct this :)
-      $column/name || '(' || $column/args/(name|value) || ')'
+  let $alias := $column/alias
   let $result := 
     if ($column/name = 'count') then
       doCount($groupQuery)
@@ -106,6 +130,7 @@ declare %private function doCount($groupByQuery as cts:query) as xs:anyAtomicTyp
   }
 };
 
+(: use of //* could result in "unpredictable" behavior later on :)
 declare %private function doMax($field as xs:string, $groupByQuery as cts:query) as xs:anyAtomicType {
   try {
     (: use index if available :)

@@ -20747,6 +20747,35 @@ module.exports = (function () {
           }
         }
       })(peg$result);
+      
+      /*
+       * Goal is to ensure alias column for literals and functions
+       */
+      (function filter(obj) {
+        for (var key in obj) {
+          var value = obj[key];
+          if (obj['alias'] == null) {
+            if (obj['type'] === 'literal') {
+              obj['alias'] = obj['value']
+            } else if (obj['type'] === 'function') {
+              var inner = obj['args'][0]['name'];
+              if (inner == null || inner === '') {
+                obj['args'][0]['value'];
+              }
+              obj['alias'] = obj['name'] + '(' + inner + ')'
+            }
+          }
+          
+          // for recursion 
+          if (Object.prototype.toString.call(value) === '[object Object]') {
+            filter(value);
+          } else if (Array.isArray(value)) {
+            for (var innerKey in value) {
+              filter(value[innerKey]);
+            }
+          }
+        }
+      })(peg$result);
 
       return peg$result;
     } else {
